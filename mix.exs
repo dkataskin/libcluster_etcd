@@ -44,10 +44,12 @@ defmodule LibclusterEtcd.MixProject do
   end
 
   defp docs do
-    [main: "readme",
-     formatter_opts: [gfm: true],
-     extras: [
-       "README.md"
-     ]]
+    [
+      main: "readme",
+      formatter_opts: [gfm: true],
+      extras: [
+        "README.md"
+      ]
+    ]
   end
 end

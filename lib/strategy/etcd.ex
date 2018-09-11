@@ -21,20 +21,26 @@ defmodule LibclusterEtcd.Strategy do
     host = Keyword.fetch!(config, :etcd_host)
     port = Keyword.get(config, :etcd_port, 2379)
     dir = Keyword.fetch!(config, :directory)
-    
+
     etcd_server_url = etcd_server_url(host, port)
     ttl = Keyword.get(config, :ttl, @default_ttl)
-    info(topology, "registering node #{inspect Node.self()} in bucket #{dir}")
+    info(topology, "registering node #{inspect(Node.self())} in bucket #{dir}")
     {:ok, key} = register(etcd_server_url, dir, ttl)
-    info(topology, "node #{inspect Node.self()} registered with key #{inspect key} in bucket #{dir}")
+
+    info(
+      topology,
+      "node #{inspect(Node.self())} registered with key #{inspect(key)} in bucket #{dir}"
+    )
 
     config = config |> Keyword.put(:etcd_server_url, etcd_server_url)
-    state = %State{state |
-      config: config,
-      meta: %{
-        registered_key: key,
-        nodes: MapSet.new()
-      }
+
+    state = %State{
+      state
+      | config: config,
+        meta: %{
+          registered_key: key,
+          nodes: MapSet.new()
+        }
     }
 
     {:ok, state, 0}
@@ -60,45 +66,47 @@ defmodule LibclusterEtcd.Strategy do
     with {:ok, nodes} <- list_nodes(etcd_server_url, dir),
          nodes_set <- nodes |> MapSet.new(),
          new_nodes <- nodes_set |> MapSet.difference(state.meta.nodes) |> MapSet.to_list(),
-         :ok <- debug(topology, fn -> "new nodes: #{inspect new_nodes}" end),
+         :ok <- debug(topology, fn -> "new nodes: #{inspect(new_nodes)}" end),
          removed_nodes <- state.meta.nodes |> MapSet.difference(nodes_set) |> MapSet.to_list(),
-         :ok <- debug(topology, fn -> "removed nodes: #{inspect removed_nodes}" end) do
+         :ok <- debug(topology, fn -> "removed nodes: #{inspect(removed_nodes)}" end) do
+      failed_to_disconnect =
+        with :ok <-
+               Cluster.Strategy.disconnect_nodes(topology, disconnect, list_nodes, removed_nodes) do
+          []
+        else
+          {:error, error_nodes} ->
+            error(topology, "couldn't disconnect from #{inspect(error_nodes)}")
+            error_nodes |> Enum.map(fn {node, _} -> node end)
 
-        failed_to_disconnect = 
-          with :ok <- Cluster.Strategy.disconnect_nodes(topology, disconnect, list_nodes, removed_nodes) do
+          error ->
+            error(topology, "#{inspect(error)}")
             []
-          else
-            {:error, error_nodes} ->
-              error(topology, "couldn't disconnect from #{inspect error_nodes}")
-              error_nodes |> Enum.map(fn {node, _} -> node end)
+        end
 
-            error ->
-              error(topology, "#{inspect error}")
-              []
-          end
+      failed_to_connect =
+        with :ok <- Cluster.Strategy.connect_nodes(topology, connect, list_nodes, new_nodes) do
+          []
+        else
+          {:error, error_nodes} ->
+            error(topology, "couldn't connect to #{inspect(error_nodes)}")
+            error_nodes |> Enum.map(fn {node, _} -> node end)
 
-        failed_to_connect =
-          with :ok <- Cluster.Strategy.connect_nodes(topology, connect, list_nodes, new_nodes) do
+          error ->
+            error(topology, "#{inspect(error)}")
             []
-          else
-            {:error, error_nodes} ->
-              error(topology, "couldn't connect to #{inspect error_nodes}")
-              error_nodes |> Enum.map(fn {node, _} -> node end)
+        end
 
-            error ->
-              error(topology, "#{inspect error}")
-              []
-          end
+      nodes_set =
+        failed_to_disconnect
+        |> Enum.reduce(nodes_set, fn node, acc ->
+          acc |> MapSet.put(node)
+        end)
 
-      nodes_set = failed_to_disconnect 
-                  |> Enum.reduce(nodes_set, fn(node, acc) ->
-                    acc |> MapSet.put(node)
-                  end)
-
-      nodes_set = failed_to_connect 
-                  |> Enum.reduce(nodes_set, fn(node, acc) ->
-                    acc |> MapSet.delete(node)
-                  end)
+      nodes_set =
+        failed_to_connect
+        |> Enum.reduce(nodes_set, fn node, acc ->
+          acc |> MapSet.delete(node)
+        end)
 
       check_nodes(state.config)
       {:noreply, %{state | meta: state.meta |> Map.put(:nodes, nodes_set)}}
@@ -116,8 +124,11 @@ defmodule LibclusterEtcd.Strategy do
   end
 
   @impl GenServer
-  def handle_info(:refresh_ttl, %State{config: config, topology: topology, meta: %{registered_key: key}} = state) do
-    debug(topology, fn -> "refreshing ttl for key #{inspect key}" end)
+  def handle_info(
+        :refresh_ttl,
+        %State{config: config, topology: topology, meta: %{registered_key: key}} = state
+      ) do
+    debug(topology, fn -> "refreshing ttl for key #{inspect(key)}" end)
     etcd_server_url = Keyword.fetch!(config, :etcd_server_url)
     dir = Keyword.fetch!(config, :directory)
     ttl = Keyword.get(config, :ttl, @default_ttl)
@@ -133,7 +144,7 @@ defmodule LibclusterEtcd.Strategy do
     dir = Keyword.fetch!(state.config, :directory)
     EtcdClient.delete(etcd_server_url, dir, state.meta.registered_key)
 
-    debug(state.topology, "terminating with reason: #{inspect reason}")
+    debug(state.topology, "terminating with reason: #{inspect(reason)}")
   end
 
   def register(etcd_server_url, dir, ttl) do
@@ -142,15 +153,16 @@ defmodule LibclusterEtcd.Strategy do
 
   def list_nodes(etcd_server_url, dir) do
     with {:ok, key_value_pairs} <- EtcdClient.list(etcd_server_url, dir) do
-      nodes = key_value_pairs
-              |> Enum.reduce([], fn({_key, value}, acc) ->
-                if String.equivalent?(value, "") do
-                  acc
-                else
-                  [value |> String.to_atom() | acc]
-                end
-              end)
-              |> Enum.reject(&(&1 === Node.self()))
+      nodes =
+        key_value_pairs
+        |> Enum.reduce([], fn {_key, value}, acc ->
+          if String.equivalent?(value, "") do
+            acc
+          else
+            [value |> String.to_atom() | acc]
+          end
+        end)
+        |> Enum.reject(&(&1 === Node.self()))
 
       {:ok, nodes}
     end
@@ -167,7 +179,7 @@ defmodule LibclusterEtcd.Strategy do
   end
 
   defp etcd_server_url(host, port) when is_binary(host) and is_integer(port) do
-    host 
+    host
     |> cleanup_trailing_slash()
     |> URI.parse()
     |> uri_check_scheme()
