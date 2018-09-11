@@ -66,12 +66,11 @@ defmodule LibclusterEtcd.Strategy do
     with {:ok, nodes} <- list_nodes(etcd_server_url, dir),
          nodes_set <- nodes |> MapSet.new(),
          new_nodes <- nodes_set |> MapSet.difference(state.meta.nodes) |> MapSet.to_list(),
-         :ok <- debug(topology, fn -> "new nodes: #{inspect(new_nodes)}" end),
-         removed_nodes <- state.meta.nodes |> MapSet.difference(nodes_set) |> MapSet.to_list(),
-         :ok <- debug(topology, fn -> "removed nodes: #{inspect(removed_nodes)}" end) do
+         removed_nodes <- state.meta.nodes |> MapSet.difference(nodes_set) |> MapSet.to_list() do
       failed_to_disconnect =
         with :ok <-
                Cluster.Strategy.disconnect_nodes(topology, disconnect, list_nodes, removed_nodes) do
+          debug(topology, "removed nodes: #{inspect(removed_nodes)}")
           []
         else
           {:error, error_nodes} ->
@@ -85,6 +84,7 @@ defmodule LibclusterEtcd.Strategy do
 
       failed_to_connect =
         with :ok <- Cluster.Strategy.connect_nodes(topology, connect, list_nodes, new_nodes) do
+          debug(topology, "new nodes: #{inspect(new_nodes)}")
           []
         else
           {:error, error_nodes} ->
@@ -128,7 +128,7 @@ defmodule LibclusterEtcd.Strategy do
         :refresh_ttl,
         %State{config: config, topology: topology, meta: %{registered_key: key}} = state
       ) do
-    debug(topology, fn -> "refreshing ttl for key #{inspect(key)}" end)
+    debug(topology, "refreshing ttl for key #{inspect(key)}")
     etcd_server_url = Keyword.fetch!(config, :etcd_server_url)
     dir = Keyword.fetch!(config, :directory)
     ttl = Keyword.get(config, :ttl, @default_ttl)
