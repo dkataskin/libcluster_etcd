@@ -5,11 +5,12 @@ defmodule LibclusterEtcd.MixProject do
     [
       app: :libcluster_etcd,
       version: "1.0.0",
-      elixir: "~> 1.6",
+      elixir: "~> 1.7",
       start_permanent: Mix.env() == :prod,
       description: description(),
       package: package(),
       source_url: "https://github.com/dkataskin/libcluster_etcd",
+      docs: docs(),
       deps: deps()
     ]
   end
@@ -23,6 +24,8 @@ defmodule LibclusterEtcd.MixProject do
   defp deps do
     [
       {:libcluster, "~> 3.0.0"},
+      {:jason, "~> 1.0"},
+      {:ex_doc, ">= 0.0.0", only: :dev}
     ]
   end
 
@@ -33,10 +36,18 @@ defmodule LibclusterEtcd.MixProject do
   defp package() do
     [
       name: "libcluster_etcd",
-      # These are the default files included in the package
+      maintainers: ["Dmitriy Kataskin"],
       files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*),
       licenses: ["MIT"],
       links: %{"GitHub" => "https://github.com/dkataskin/libcluster_etcd"}
     ]
+  end
+
+  defp docs do
+    [main: "readme",
+     formatter_opts: [gfm: true],
+     extras: [
+       "README.md"
+     ]]
   end
 end
