@@ -34,7 +34,7 @@ defmodule LibclusterEtcd.MixProject do
     [
       name: "libcluster_etcd",
       # These are the default files included in the package
-      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG* src),
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*),
       licenses: ["MIT"],
       links: %{"GitHub" => "https://github.com/dkataskin/libcluster_etcd"}
     ]
