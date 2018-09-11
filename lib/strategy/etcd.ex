@@ -113,12 +113,12 @@ defmodule LibclusterEtcd.Strategy do
     else
       {:error, reason} ->
         error(topology, reason)
-        check_nodes(state.config)
+        check_nodes(config)
         {:noreply, state}
 
       error ->
-        error(topology, error)
-        check_nodes(state.config)
+        error(topology, "#{inspect(error)}")
+        check_nodes(config)
         {:noreply, state}
     end
   end
