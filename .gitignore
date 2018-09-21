@@ -23,3 +23,5 @@ erl_crash.dump
 libcluster_etcd-*.tar
 
 etcd.sh
+libcluster_etcd.iml
+.idea
