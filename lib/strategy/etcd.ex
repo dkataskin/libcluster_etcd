@@ -41,8 +41,10 @@ defmodule LibclusterEtcd.Strategy do
     end
 
     ttl = Keyword.get(config, :ttl, @default_ttl)
+    http_opts = Keyword.get(state.config, :http_opts, [])
+
     info(topology, "registering node #{inspect(Node.self())} in bucket #{dir}")
-    {:ok, key} = register(etcd_nodes, dir, ttl)
+    {:ok, key} = register(etcd_nodes, dir, ttl, http_opts)
 
     info(
       topology,
@@ -79,8 +81,9 @@ defmodule LibclusterEtcd.Strategy do
 
     etcd_nodes = Keyword.fetch!(config, :etcd_nodes)
     dir = Keyword.fetch!(config, :directory)
+    http_opts = Keyword.get(state.config, :http_opts, [])
 
-    with {:ok, nodes} <- list_nodes(etcd_nodes, dir),
+    with {:ok, nodes} <- list_nodes(etcd_nodes, dir, http_opts),
          nodes_set <- nodes |> MapSet.new(),
          new_nodes <- nodes_set |> MapSet.difference(state.meta.nodes) |> MapSet.to_list(),
          removed_nodes <- state.meta.nodes |> MapSet.difference(nodes_set) |> MapSet.to_list() do
@@ -149,8 +152,9 @@ defmodule LibclusterEtcd.Strategy do
     etcd_nodes = Keyword.fetch!(config, :etcd_nodes)
     dir = Keyword.fetch!(config, :directory)
     ttl = Keyword.get(config, :ttl, @default_ttl)
+    http_opts = Keyword.get(state.config, :http_opts, [])
 
-    {:ok, :refreshed} = EtcdClient.refresh_ttl(etcd_nodes, dir, key, ttl, true)
+    {:ok, :refreshed} = EtcdClient.refresh_ttl(etcd_nodes, dir, key, ttl, true, http_opts)
     send_refresh_ttl(config)
     {:noreply, state}
   end
@@ -159,17 +163,19 @@ defmodule LibclusterEtcd.Strategy do
   def terminate(reason, state) do
     etcd_nodes = Keyword.fetch!(state.config, :etcd_nodes)
     dir = Keyword.fetch!(state.config, :directory)
-    EtcdClient.delete(etcd_nodes, dir, state.meta.registered_key)
+    http_opts = Keyword.get(state.config, :http_opts, [])
+
+    EtcdClient.delete(etcd_nodes, dir, state.meta.registered_key, http_opts)
 
     debug(state.topology, "terminating with reason: #{inspect(reason)}")
   end
 
-  def register(etcd_nodes, dir, ttl) do
-    EtcdClient.push(etcd_nodes, dir, Node.self() |> to_string(), ttl)
+  def register(etcd_nodes, dir, ttl, http_opts) do
+    EtcdClient.push(etcd_nodes, dir, Node.self() |> to_string(), ttl, http_opts)
   end
 
-  def list_nodes(etcd_nodes, dir) do
-    with {:ok, key_value_pairs} <- EtcdClient.list(etcd_nodes, dir) do
+  def list_nodes(etcd_nodes, dir, http_opts) do
+    with {:ok, key_value_pairs} <- EtcdClient.list(etcd_nodes, dir, http_opts) do
       nodes =
         key_value_pairs
         |> Enum.reduce([], fn {_key, value}, acc ->

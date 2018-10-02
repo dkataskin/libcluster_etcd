@@ -1,6 +1,6 @@
 # LibclusterEtcd
 
-Etcd strategy for libcluster
+Etcd strategy for libcluster. It utilisez Etcd v2 API.
 
 ## Installation
 
@@ -25,7 +25,7 @@ config :libcluster,
       strategy: LibclusterEtcd.Strategy,
       config: [
         etcd_nodes: ["http://10.0.0.1:2379", "http://10.0.0.2:2379"],
-        directory: "cluster
+        directory: "cluster"
       ]
     ]
   ]
@@ -39,7 +39,7 @@ config :libcluster,
       strategy: LibclusterEtcd.Strategy,
       config: [
         etcd_nodes: ["http://10.0.0.1:2379", "http://10.0.0.2:2379"],
-        directory: "cluster,
+        directory: "cluster",
         ttl: 10_000,
         ttl_refresh_interval: 5_000,
         polling_interval: 5_000
