@@ -1,18 +1,18 @@
 defmodule LibclusterEtcd.EtcdClient do
   @keys "/v2/keys"
+  @httpc_opts [body_format: :binary, full_result: false]
   @default_http_opts [
-    timeout: 20_000,
-    connect_timeout: 20_000,
+    timeout: 10_000,
+    connect_timeout: 2_000,
     autoredirect: false,
     relaxed: true
   ]
-  @default_ttl 30
+  @default_ttl 30_000
 
-  def push(etcd_server, dir, value, ttl \\ @default_ttl, http_opts \\ [])
+  def push(seeds, dir, value, ttl \\ @default_ttl, http_opts \\ [])
       when is_binary(dir) and is_integer(ttl) do
-    req = make_request(etcd_server, dir, %{"value" => value, "ttl" => ttl})
-
-    with {:ok, {201, response}} <- exec_request(:post, req, http_opts),
+    request = {:post, dir, %{"value" => value, "ttl" => round(ttl / 1000)}}
+    with {:ok, {201, response}} <- exec_request(seeds, request, http_opts),
          {:ok, json} <- Jason.decode(response),
          key <- json |> Map.fetch!("node") |> Map.fetch!("key") |> cleanup(dir) do
       {:ok, :binary.copy(key)}
@@ -25,16 +25,15 @@ defmodule LibclusterEtcd.EtcdClient do
     end
   end
 
-  def refresh_ttl(etcd_server, dir, key, ttl \\ @default_ttl, prev_exist \\ true, http_opts \\ [])
+  def refresh_ttl(seeds, dir, key, ttl \\ @default_ttl, prev_exist \\ true, http_opts \\ [])
       when is_binary(dir) and is_binary(key) and is_integer(ttl) do
-    req =
-      make_request(etcd_server, dir <> "/" <> key, %{
-        "ttl" => ttl,
-        "refresh" => true,
-        "prevExist" => prev_exist
-      })
+    payload = %{
+      "ttl" => round(ttl / 1000),
+      "refresh" => true,
+      "prevExist" => prev_exist
+    }
 
-    with {:ok, {200, _response}} <- exec_request(:put, req, http_opts) do
+    with {:ok, {200, _response}} <- exec_request(seeds, {:put, dir <> "/" <> key, payload}, http_opts) do
       {:ok, :refreshed}
     else
       {:error, error} ->
@@ -48,10 +47,8 @@ defmodule LibclusterEtcd.EtcdClient do
     end
   end
 
-  def list(etcd_server, dir, http_opts \\ []) when is_binary(dir) do
-    req = make_request(etcd_server, dir)
-
-    with {:ok, {200, response}} <- exec_request(:get, req, http_opts),
+  def list(seeds, dir, http_opts \\ []) when is_binary(dir) do
+    with {:ok, {200, response}} <- exec_request(seeds, {:get, dir}, http_opts),
          {:ok, json} <- Jason.decode(response) do
       keys =
         json
@@ -75,10 +72,8 @@ defmodule LibclusterEtcd.EtcdClient do
     end
   end
 
-  def delete(etcd_server, dir, key, http_opts \\ []) when is_binary(dir) and is_binary(key) do
-    req = make_request(etcd_server, dir <> "/" <> "key")
-
-    with {:ok, {200, _response}} <- exec_request(:delete, req, http_opts) do
+  def delete(seeds, dir, key, http_opts \\ []) when is_binary(dir) and is_binary(key) do
+    with {:ok, {200, _response}} <- exec_request(seeds, {:delete, dir <> "/" <> "key"}, http_opts) do
       {:ok, :deleted}
     else
       {:error, error} ->
@@ -86,6 +81,35 @@ defmodule LibclusterEtcd.EtcdClient do
 
       error ->
         {:error, error}
+    end
+  end
+
+  defp exec_request(seeds, request, http_opts) do
+    req_http_opts = @default_http_opts |> Keyword.merge(http_opts)
+    
+    seeds
+    |> Enum.shuffle()
+    |> do_exec_request(request, req_http_opts, nil)
+  end
+
+  defp do_exec_request([], _req, _http_opts, error), do: {:error, error}
+  defp do_exec_request([seed | seeds], {method, path} = req, http_opts, _error) do
+    request = make_request(seed, path)
+    with {:ok, result} <- :httpc.request(method, request, http_opts, @httpc_opts) do
+      {:ok, result}
+    else
+      error ->
+        do_exec_request(seeds, req, http_opts, error)
+    end
+  end
+
+  defp do_exec_request([seed | seeds], {method, path, payload} = req, http_opts, _error) do
+    request = make_request(seed, path, payload)
+    with {:ok, result} <- :httpc.request(method, request, http_opts, @httpc_opts) do
+      {:ok, result}
+    else
+      error ->
+        do_exec_request(seeds, req, http_opts, error)
     end
   end
 
@@ -99,15 +123,6 @@ defmodule LibclusterEtcd.EtcdClient do
     url = etcd_server |> make_url(path) |> String.to_charlist()
 
     {url, [], 'application/x-www-form-urlencoded', payload |> form_encode()}
-  end
-
-  defp exec_request(method, request, http_opts) do
-    req_http_opts = @default_http_opts |> Keyword.merge(http_opts)
-    opts = [body_format: :binary, full_result: false]
-
-    with {:ok, result} <- :httpc.request(method, request, req_http_opts, opts) do
-      {:ok, result}
-    end
   end
 
   defp make_url(base, path) do

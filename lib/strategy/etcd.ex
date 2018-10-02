@@ -9,7 +9,8 @@ defmodule LibclusterEtcd.Strategy do
 
   @default_polling_interval 5_000
   @default_ttl_refresh_interval 5_000
-  @default_ttl 10
+  @default_ttl 10_000
+  @etcd_default_port 2379
 
   @impl Cluster.Strategy
   def start_link(opts) do
@@ -18,21 +19,39 @@ defmodule LibclusterEtcd.Strategy do
 
   @impl GenServer
   def init([%State{config: config, topology: topology} = state]) do
-    host = Keyword.fetch!(config, :etcd_host)
+    # compatibility with 1.0.1
+    host = Keyword.get(config, :etcd_host)
     port = Keyword.get(config, :etcd_port, 2379)
-    dir = Keyword.fetch!(config, :directory)
+    etcd_nodes =
+      if is_nil(host) do
+        config 
+        |> Keyword.fetch!(:etcd_nodes)
+        |> Enum.map(&(etcd_server_url(&1)))
+      else
+        [etcd_server_url(host, port)]
+      end
 
-    etcd_server_url = etcd_server_url(host, port)
+    if length(etcd_nodes) == 0 do
+      raise "no etcd nodes specified in the config!"
+    end
+
+    dir = Keyword.fetch!(config, :directory)
+    if length(etcd_nodes) == 0 do
+      raise "no etcd directory specified in the config!"
+    end
+
     ttl = Keyword.get(config, :ttl, @default_ttl)
+    http_opts = Keyword.get(state.config, :http_opts, [])
+
     info(topology, "registering node #{inspect(Node.self())} in bucket #{dir}")
-    {:ok, key} = register(etcd_server_url, dir, ttl)
+    {:ok, key} = register(etcd_nodes, dir, ttl, http_opts)
 
     info(
       topology,
       "node #{inspect(Node.self())} registered with key #{inspect(key)} in bucket #{dir}"
     )
 
-    config = config |> Keyword.put(:etcd_server_url, etcd_server_url)
+    config = config |> Keyword.put(:etcd_nodes, etcd_nodes)
 
     state = %State{
       state
@@ -60,10 +79,11 @@ defmodule LibclusterEtcd.Strategy do
     disconnect = state.disconnect
     list_nodes = state.list_nodes
 
-    etcd_server_url = Keyword.fetch!(config, :etcd_server_url)
+    etcd_nodes = Keyword.fetch!(config, :etcd_nodes)
     dir = Keyword.fetch!(config, :directory)
+    http_opts = Keyword.get(state.config, :http_opts, [])
 
-    with {:ok, nodes} <- list_nodes(etcd_server_url, dir),
+    with {:ok, nodes} <- list_nodes(etcd_nodes, dir, http_opts),
          nodes_set <- nodes |> MapSet.new(),
          new_nodes <- nodes_set |> MapSet.difference(state.meta.nodes) |> MapSet.to_list(),
          removed_nodes <- state.meta.nodes |> MapSet.difference(nodes_set) |> MapSet.to_list() do
@@ -108,17 +128,17 @@ defmodule LibclusterEtcd.Strategy do
           acc |> MapSet.delete(node)
         end)
 
-      check_nodes(state.config)
+      send_check_nodes(state.config)
       {:noreply, %{state | meta: state.meta |> Map.put(:nodes, nodes_set)}}
     else
       {:error, reason} ->
         error(topology, reason)
-        check_nodes(config)
+        send_check_nodes(config)
         {:noreply, state}
 
       error ->
         error(topology, "#{inspect(error)}")
-        check_nodes(config)
+        send_check_nodes(config)
         {:noreply, state}
     end
   end
@@ -129,30 +149,33 @@ defmodule LibclusterEtcd.Strategy do
         %State{config: config, topology: topology, meta: %{registered_key: key}} = state
       ) do
     debug(topology, "refreshing ttl for key #{inspect(key)}")
-    etcd_server_url = Keyword.fetch!(config, :etcd_server_url)
+    etcd_nodes = Keyword.fetch!(config, :etcd_nodes)
     dir = Keyword.fetch!(config, :directory)
     ttl = Keyword.get(config, :ttl, @default_ttl)
+    http_opts = Keyword.get(state.config, :http_opts, [])
 
-    EtcdClient.refresh_ttl(etcd_server_url, dir, key, ttl, true)
-    refresh_ttl(config)
+    {:ok, :refreshed} = EtcdClient.refresh_ttl(etcd_nodes, dir, key, ttl, true, http_opts)
+    send_refresh_ttl(config)
     {:noreply, state}
   end
 
   @impl GenServer
   def terminate(reason, state) do
-    etcd_server_url = Keyword.fetch!(state.config, :etcd_server_url)
+    etcd_nodes = Keyword.fetch!(state.config, :etcd_nodes)
     dir = Keyword.fetch!(state.config, :directory)
-    EtcdClient.delete(etcd_server_url, dir, state.meta.registered_key)
+    http_opts = Keyword.get(state.config, :http_opts, [])
+
+    EtcdClient.delete(etcd_nodes, dir, state.meta.registered_key, http_opts)
 
     debug(state.topology, "terminating with reason: #{inspect(reason)}")
   end
 
-  def register(etcd_server_url, dir, ttl) do
-    EtcdClient.push(etcd_server_url, dir, Node.self() |> to_string(), ttl)
+  def register(etcd_nodes, dir, ttl, http_opts) do
+    EtcdClient.push(etcd_nodes, dir, Node.self() |> to_string(), ttl, http_opts)
   end
 
-  def list_nodes(etcd_server_url, dir) do
-    with {:ok, key_value_pairs} <- EtcdClient.list(etcd_server_url, dir) do
+  def list_nodes(etcd_nodes, dir, http_opts) do
+    with {:ok, key_value_pairs} <- EtcdClient.list(etcd_nodes, dir, http_opts) do
       nodes =
         key_value_pairs
         |> Enum.reduce([], fn {_key, value}, acc ->
@@ -168,18 +191,18 @@ defmodule LibclusterEtcd.Strategy do
     end
   end
 
-  defp check_nodes(config) do
+  defp send_check_nodes(config) do
     polling_interval = Keyword.get(config, :polling_interval, @default_polling_interval)
     Process.send_after(self(), :check_nodes, polling_interval)
   end
 
-  defp refresh_ttl(config) do
+  defp send_refresh_ttl(config) do
     ttl_interval = Keyword.get(config, :ttl_refresh_interval, @default_ttl_refresh_interval)
     Process.send_after(self(), :refresh_ttl, ttl_interval)
   end
 
-  defp etcd_server_url(host, port) when is_binary(host) and is_integer(port) do
-    host
+  defp etcd_server_url(address, port \\ @etcd_default_port) when is_binary(address) and is_integer(port) do
+    address
     |> cleanup_trailing_slash()
     |> URI.parse()
     |> uri_check_scheme()
@@ -188,11 +211,11 @@ defmodule LibclusterEtcd.Strategy do
     |> URI.to_string()
   end
 
-  defp cleanup_trailing_slash(host) do
-    if String.ends_with?(host, "/") do
-      host |> String.slice(0..-2)
+  defp cleanup_trailing_slash(address) do
+    if String.ends_with?(address, "/") do
+      address |> String.slice(0..-2)
     else
-      host
+      address
     end
   end
 
