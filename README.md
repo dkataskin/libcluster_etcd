@@ -1,16 +1,17 @@
+[![Hex.pm Version](http://img.shields.io/hexpm/v/libcluster_etcd.svg?style=flat)](https://hex.pm/packages/libcluster_etcd)
+
 # LibclusterEtcd
 
 Etcd strategy for libcluster. It utilisez Etcd v2 API.
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `libcluster_etcd` to your list of dependencies in `mix.exs`:
+The package can be installed by adding `libcluster_etcd` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:libcluster_etcd, "~> 1.0.0"}
+    {:libcluster_etcd, "~> 1.1.0"}
   ]
 end
 ```
