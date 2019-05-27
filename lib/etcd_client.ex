@@ -73,7 +73,7 @@ defmodule LibclusterEtcd.EtcdClient do
   end
 
   def delete(seeds, dir, key, http_opts \\ []) when is_binary(dir) and is_binary(key) do
-    with {:ok, {200, _response}} <- exec_request(seeds, {:delete, dir <> "/" <> "key"}, http_opts) do
+    with {:ok, {200, _response}} <- exec_request(seeds, {:delete, dir <> "/" <> key}, http_opts) do
       {:ok, :deleted}
     else
       {:error, error} ->
